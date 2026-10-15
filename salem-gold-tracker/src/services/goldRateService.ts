@@ -33,8 +33,8 @@ export interface GoldApiResponse {
 const STORAGE_KEY_LATEST = '@salem_gold_latest_rate_22k';
 const STORAGE_KEY_HISTORY = '@salem_gold_saved_history_30days';
 
-// Replace with your Render URL once deployed (e.g. 'https://salem-gold-api.onrender.com')
-export const RENDER_CLOUD_URL: string = '';
+// Live Render cloud backend URL
+export const RENDER_CLOUD_URL: string = 'https://salem-gold-tracker.onrender.com';
 
 /**
  * Resolves the backend API URL.
