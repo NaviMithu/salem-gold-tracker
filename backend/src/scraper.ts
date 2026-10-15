@@ -46,7 +46,7 @@ async function readPrices(driver: WebDriver): Promise<GoldPrices> {
   };
 }
 
-export async function scrapeGoodreturns() {
+export async function scrapeGoodreturns(targetDate?: string) {
   let driver: WebDriver | undefined;
 
   try {
@@ -137,9 +137,8 @@ export async function scrapeGoodreturns() {
         }));
     })) as HistoricalRate[];
 
-    // Optional date supplied through the GOLD_DATE environment variable.
-    // Example: GOLD_DATE=2026-10-13
-    const requestedDate = process.env.GOLD_DATE;
+    // Optional date supplied through targetDate parameter or SCRAPER_FORCE_DATE
+    const requestedDate = targetDate ?? process.env.SCRAPER_FORCE_DATE;
 
     let selectedHistoricalDate: {
       date: string;
