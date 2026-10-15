@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   StyleSheet,
   Text,
@@ -9,12 +9,14 @@ import {
   Switch,
   ActivityIndicator,
   Alert,
+  AppState,
+  AppStateStatus,
 } from 'react-native';
 import {
   fetchGoldRates,
   getStoredGoldData,
   GoldApiResponse,
-  HistoricalRateItem,
+  DayRate22K,
 } from '../services/goldRateService';
 import {
   scheduleDaily7AMNotification,
@@ -28,25 +30,27 @@ export default function HomeScreen() {
   const [data, setData] = useState<GoldApiResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [selectedPurity, setSelectedPurity] = useState<'22K' | '24K'>('22K');
   const [notificationEnabled, setNotificationEnabled] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [showAll30Days, setShowAll30Days] = useState(false);
 
-  // Load initial data and check notification state
+  const appState = useRef(AppState.currentState);
+
+  // Load fresh data from the backend
   const loadRates = useCallback(async (forceRefresh = false) => {
     try {
       setErrorMessage(null);
       const result = await fetchGoldRates(forceRefresh);
       setData(result);
     } catch (err) {
-      console.error('Failed to load gold rates:', err);
-      // Fallback to local storage
+      console.error('Failed to fetch gold rates:', err);
+      // Fallback to offline phone storage if backend is unreachable
       const cached = await getStoredGoldData();
       if (cached) {
         setData(cached);
-        setErrorMessage('Displaying offline saved rate. Check server connection.');
+        setErrorMessage('Showing saved offline rates. Check backend connection.');
       } else {
-        setErrorMessage('Unable to connect to gold rate server. Please ensure backend is running.');
+        setErrorMessage('Unable to connect to backend server. Make sure it is running.');
       }
     } finally {
       setLoading(false);
@@ -54,13 +58,29 @@ export default function HomeScreen() {
     }
   }, []);
 
+  // Fetch data on app open and when app returns to foreground
   useEffect(() => {
-    loadRates();
+    loadRates(false);
 
-    // Check if notification is already scheduled
+    // Re-fetch whenever app comes back to foreground
+    const subscription = AppState.addEventListener('change', (nextAppState: AppStateStatus) => {
+      if (
+        appState.current.match(/inactive|background/) &&
+        nextAppState === 'active'
+      ) {
+        loadRates(false);
+      }
+      appState.current = nextAppState;
+    });
+
+    // Check if daily 7:00 AM notification is active
     isDailyNotificationScheduled().then((isScheduled) => {
       setNotificationEnabled(isScheduled);
     });
+
+    return () => {
+      subscription.remove();
+    };
   }, [loadRates]);
 
   const onRefresh = () => {
@@ -70,24 +90,21 @@ export default function HomeScreen() {
 
   // Toggle 7:00 AM notification
   const handleToggleNotification = async (enabled: boolean) => {
-    const currentRate =
-      selectedPurity === '22K'
-        ? data?.today.rate22K
-        : data?.today.rate24K;
+    const currentRate = data?.today.rate22K;
 
     if (enabled) {
       const scheduled = await scheduleDaily7AMNotification(currentRate);
       if (scheduled) {
         setNotificationEnabled(true);
         Alert.alert(
-          '7:00 AM Alert Enabled',
-          'You will receive a notification every day at 7:00 AM with the latest Salem gold rate.',
+          '7:00 AM Alert Enabled ⏰',
+          'You will receive a notification every morning at 7:00 AM with the latest Salem 22K gold rate.',
         );
       } else {
         setNotificationEnabled(false);
         Alert.alert(
-          'Permission Needed',
-          'Please enable notifications in your phone settings to receive the daily 7:00 AM rate alert.',
+          'Permission Required',
+          'Please grant notification permission in your phone settings to receive the daily 7:00 AM rate alert.',
         );
       }
     } else {
@@ -98,36 +115,20 @@ export default function HomeScreen() {
 
   // Test notification button
   const handleTestNotification = async () => {
-    const rate =
-      selectedPurity === '22K'
-        ? data?.today.rate22K ?? 13515
-        : data?.today.rate24K ?? 14744;
-
+    const rate = data?.today.rate22K ?? 13515;
     const sent = await sendTestNotificationNow(rate);
     if (!sent) {
       Alert.alert(
         'Permission Denied',
-        'Please grant notification permission in your phone settings to receive alerts.',
+        'Please allow notification permissions in your phone settings to receive alerts.',
       );
     }
   };
 
-  // Extract active price and changes based on chosen purity
-  const is22K = selectedPurity === '22K';
-  const pricePerGram = is22K
-    ? data?.today.rate22K ?? 13515
-    : data?.today.rate24K ?? 14744;
-
-  const sovereignPrice = pricePerGram * 8; // 8 grams = 1 Sovereign (Pavan)
-
-  const change = is22K
-    ? data?.today.change22K ?? -75
-    : (data?.history[0]?.change24K ?? -82);
-
-  const changePercentage =
-    data?.today.yesterdayRate22K && is22K
-      ? data.today.changePercentage
-      : Number(((change / (pricePerGram - change)) * 100).toFixed(2));
+  const rate22K = data?.today.rate22K ?? 13515;
+  const sovereign22K = data?.today.sovereign22K ?? rate22K * 8; // 8 grams = 1 Sovereign (Pavan)
+  const change22K = data?.today.change22K ?? -75;
+  const changePercentage = data?.today.changePercentage ?? -0.55;
 
   const displayDate =
     data?.today.displayDate ||
@@ -137,7 +138,8 @@ export default function HomeScreen() {
       year: 'numeric',
     });
 
-  const historyList: HistoricalRateItem[] = data?.history || [];
+  const historyList: DayRate22K[] = data?.history || [];
+  const displayedHistory = showAll30Days ? historyList : historyList.slice(0, 10);
 
   return (
     <ScrollView
@@ -152,71 +154,48 @@ export default function HomeScreen() {
         />
       }
     >
-      {/* Header */}
+      {/* App Header */}
       <View style={styles.header}>
         <View>
           <Text style={styles.appName}>Salem Gold Tracker</Text>
-          <Text style={styles.subtitle}>Salem, Tamil Nadu · Live Market Rates</Text>
+          <Text style={styles.subtitle}>Salem, Tamil Nadu · 22K Ornament Gold</Text>
         </View>
 
         {loading && <ActivityIndicator size="small" color="#F3D58A" />}
       </View>
 
-      {/* Offline/Error Notice */}
+      {/* Offline Warning Banner if backend unreachable */}
       {errorMessage && (
         <View style={styles.warningBanner}>
           <Text style={styles.warningText}>{errorMessage}</Text>
         </View>
       )}
 
-      {/* Purity Switcher Tabs */}
-      <View style={styles.tabContainer}>
-        <TouchableOpacity
-          style={[styles.tabButton, is22K && styles.activeTabButton]}
-          onPress={() => setSelectedPurity('22K')}
-        >
-          <Text style={[styles.tabText, is22K && styles.activeTabText]}>
-            22K Hallmark Gold
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.tabButton, !is22K && styles.activeTabButton]}
-          onPress={() => setSelectedPurity('24K')}
-        >
-          <Text style={[styles.tabText, !is22K && styles.activeTabText]}>
-            24K Pure Gold
-          </Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* Main Rate Card */}
+      {/* Main 22K Rate Card */}
       <View style={styles.rateCard}>
         <View style={styles.cardHeaderRow}>
-          <Text style={styles.label}>TODAY'S GOLD RATE</Text>
+          <Text style={styles.label}>TODAY'S 22K GOLD RATE</Text>
           <View style={styles.liveBadge}>
             <View style={styles.liveDot} />
             <Text style={styles.liveText}>LIVE</Text>
           </View>
         </View>
 
-        <Text style={styles.purityText}>
-          {selectedPurity} Gold · 1 Gram
-        </Text>
+        <Text style={styles.purityText}>22K Hallmark Gold · 1 Gram</Text>
 
         <View style={styles.priceRow}>
           <Text style={styles.currencySymbol}>₹</Text>
           <Text style={styles.priceNumber}>
-            {pricePerGram.toLocaleString('en-IN')}
+            {rate22K.toLocaleString('en-IN')}
           </Text>
           <Text style={styles.perGramUnit}>/ gram</Text>
         </View>
 
-        {/* 1 Sovereign (8 Grams) Calculation */}
+        {/* 1 Sovereign (8 Grams Pavan) */}
         <View style={styles.sovereignBox}>
           <Text style={styles.sovereignLabel}>1 Sovereign (8g Pavan):</Text>
           <Text style={styles.sovereignPrice}>
-            ₹{sovereignPrice.toLocaleString('en-IN')}
+            ₹{sovereign22K.toLocaleString('en-IN')}
           </Text>
         </View>
 
@@ -228,18 +207,18 @@ export default function HomeScreen() {
             <Text
               style={[
                 styles.changeAmount,
-                change >= 0 ? styles.positiveText : styles.negativeText,
+                change22K >= 0 ? styles.positiveText : styles.negativeText,
               ]}
             >
-              {change >= 0 ? '+' : '-'}₹{Math.abs(change).toLocaleString('en-IN')}
+              {change22K >= 0 ? '+' : '-'}₹{Math.abs(change22K).toLocaleString('en-IN')}
             </Text>
             <Text
               style={[
                 styles.changePercent,
-                change >= 0 ? styles.positiveText : styles.negativeText,
+                change22K >= 0 ? styles.positiveText : styles.negativeText,
               ]}
             >
-              ({change >= 0 ? '+' : ''}
+              ({change22K >= 0 ? '+' : ''}
               {changePercentage}%)
             </Text>
           </View>
@@ -247,23 +226,23 @@ export default function HomeScreen() {
         </View>
       </View>
 
-      {/* 7:00 AM Daily Notification Card */}
+      {/* Daily 7:00 AM Notification Card */}
       <View style={styles.notificationCard}>
         <View style={styles.notificationHeader}>
           <View style={styles.notificationIconWrap}>
             <Text style={styles.bellIcon}>🔔</Text>
           </View>
           <View style={styles.notificationTextWrap}>
-            <Text style={styles.notificationTitle}>Daily 7:00 AM Notification</Text>
+            <Text style={styles.notificationTitle}>Daily 7:00 AM Alert</Text>
             <Text style={styles.notificationSubtitle}>
-              Get Salem's gold rate alert on your phone every morning
+              Get Salem's 22K rate notified on your phone every morning
             </Text>
           </View>
           <Switch
             value={notificationEnabled}
             onValueChange={handleToggleNotification}
-            trackColor={{ false: '#32394A', true: '#F3D58A' }}
-            thumbColor={notificationEnabled ? '#1A1F2B' : '#778095'}
+            trackColor={{ false: '#2D3546', true: '#F3D58A' }}
+            thumbColor={notificationEnabled ? '#171B24' : '#6B7487'}
           />
         </View>
 
@@ -276,64 +255,82 @@ export default function HomeScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Interactive History Chart Card */}
+      {/* 30-Day Interactive Gold Rate Chart */}
       <View style={styles.chartCard}>
         <View style={styles.chartHeader}>
           <View>
-            <Text style={styles.sectionTitle}>Price Trend Chart</Text>
+            <Text style={styles.sectionTitle}>30-Day Price Chart</Text>
             <Text style={styles.chartSubtitle}>
-              Salem {selectedPurity} rate in ₹ per gram
+              Full month 22K trend in ₹ per gram
             </Text>
           </View>
           <Text style={styles.trendIcon}>📈</Text>
         </View>
 
-        <GoldChart history={historyList} purity={selectedPurity} />
+        {/* Hover/Touch to show amount right on the chart */}
+        <GoldChart history={historyList} />
       </View>
 
-      {/* 10-Day Historical Table */}
+      {/* 30-Day Historical Table */}
       {historyList.length > 0 && (
         <View style={styles.historyCard}>
-          <Text style={styles.sectionTitle}>Recent Price History</Text>
-          <Text style={styles.chartSubtitle}>Past days market rates in Salem</Text>
+          <View style={styles.historyCardHeader}>
+            <View>
+              <Text style={styles.sectionTitle}>
+                {showAll30Days ? 'Full 30-Day History' : 'Last 10 Days History'}
+              </Text>
+              <Text style={styles.chartSubtitle}>Daily 22K gold rates in Salem</Text>
+            </View>
+
+            <TouchableOpacity
+              style={styles.toggleDaysBtn}
+              onPress={() => setShowAll30Days((prev) => !prev)}
+            >
+              <Text style={styles.toggleDaysText}>
+                {showAll30Days ? 'Show 10 Days' : 'View All 30 Days'}
+              </Text>
+            </TouchableOpacity>
+          </View>
 
           <View style={styles.historyTable}>
             <View style={styles.tableHeaderRow}>
               <Text style={[styles.tableHeaderCell, { flex: 1.4 }]}>Date</Text>
               <Text style={[styles.tableHeaderCell, { flex: 1, textAlign: 'right' }]}>
-                {selectedPurity} / g
+                22K / Gram
               </Text>
               <Text style={[styles.tableHeaderCell, { flex: 1, textAlign: 'right' }]}>
-                Change
+                Difference
               </Text>
             </View>
 
-            {historyList.map((item, index) => {
-              const rate = is22K ? item.rate22K : item.rate24K;
-              const chg = is22K ? item.change22K : item.change24K;
+            {displayedHistory.map((item, index) => {
               return (
                 <View
                   key={index}
                   style={[
                     styles.tableRow,
                     index === 0 && styles.firstTableRow,
-                    index === historyList.length - 1 && styles.lastTableRow,
+                    index === displayedHistory.length - 1 && styles.lastTableRow,
                   ]}
                 >
                   <Text style={[styles.tableCellDate, { flex: 1.4 }]}>
                     {item.date}
                   </Text>
                   <Text style={[styles.tableCellPrice, { flex: 1, textAlign: 'right' }]}>
-                    ₹{rate.toLocaleString('en-IN')}
+                    ₹{item.rate22K.toLocaleString('en-IN')}
                   </Text>
                   <Text
                     style={[
                       styles.tableCellChange,
                       { flex: 1, textAlign: 'right' },
-                      chg >= 0 ? styles.positiveText : styles.negativeText,
+                      item.change22K >= 0 ? styles.positiveText : styles.negativeText,
                     ]}
                   >
-                    {chg > 0 ? `+₹${chg}` : chg < 0 ? `-₹${Math.abs(chg)}` : '₹0'}
+                    {item.change22K > 0
+                      ? `+₹${item.change22K}`
+                      : item.change22K < 0
+                      ? `-₹${Math.abs(item.change22K)}`
+                      : '₹0'}
                   </Text>
                 </View>
               );
@@ -345,11 +342,11 @@ export default function HomeScreen() {
       {/* Footer Info */}
       <View style={styles.footerContainer}>
         <Text style={styles.footerText}>
-          Salem Gold Tracker · Live Data via Goodreturns
+          Salem Gold Tracker · 22K Gold Rates via Goodreturns
         </Text>
         {data?.scrapedAt && (
           <Text style={styles.footerSubtext}>
-            Updated: {new Date(data.scrapedAt).toLocaleTimeString('en-IN')}
+            Sync: {new Date(data.scrapedAt).toLocaleTimeString('en-IN')}
           </Text>
         )}
       </View>
@@ -385,7 +382,7 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   warningBanner: {
-    backgroundColor: '#382A1B',
+    backgroundColor: '#352718',
     marginHorizontal: 18,
     marginBottom: 12,
     padding: 10,
@@ -398,34 +395,8 @@ const styles = StyleSheet.create({
     fontSize: 12,
     textAlign: 'center',
   },
-  tabContainer: {
-    flexDirection: 'row',
-    marginHorizontal: 18,
-    marginBottom: 16,
-    backgroundColor: '#1A202C',
-    borderRadius: 14,
-    padding: 4,
-  },
-  tabButton: {
-    flex: 1,
-    paddingVertical: 10,
-    alignItems: 'center',
-    borderRadius: 10,
-  },
-  activeTabButton: {
-    backgroundColor: '#283144',
-  },
-  tabText: {
-    color: '#7E8799',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  activeTabText: {
-    color: '#F3D58A',
-    fontWeight: '700',
-  },
   rateCard: {
-    backgroundColor: '#1A202C',
+    backgroundColor: '#181E2B',
     marginHorizontal: 18,
     padding: 22,
     borderRadius: 22,
@@ -446,28 +417,28 @@ const styles = StyleSheet.create({
   liveBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#272F22',
+    backgroundColor: '#1E2D1A',
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#4E7238',
+    borderColor: '#3D612B',
   },
   liveDot: {
     width: 6,
     height: 6,
     borderRadius: 3,
-    backgroundColor: '#72D65B',
+    backgroundColor: '#6FD357',
     marginRight: 5,
   },
   liveText: {
-    color: '#72D65B',
+    color: '#6FD357',
     fontSize: 10,
     fontWeight: '700',
     letterSpacing: 0.5,
   },
   purityText: {
-    color: '#A0A8B8',
+    color: '#9FA7B8',
     fontSize: 14,
     marginTop: 10,
   },
@@ -489,21 +460,21 @@ const styles = StyleSheet.create({
     letterSpacing: -0.5,
   },
   perGramUnit: {
-    color: '#A0A8B8',
+    color: '#9FA7B8',
     fontSize: 15,
     marginLeft: 8,
   },
   sovereignBox: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#141822',
+    backgroundColor: '#11151E',
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 10,
     marginTop: 12,
   },
   sovereignLabel: {
-    color: '#8A92A4',
+    color: '#848C9E',
     fontSize: 12,
     fontWeight: '500',
   },
@@ -514,12 +485,12 @@ const styles = StyleSheet.create({
     marginLeft: 6,
   },
   dateText: {
-    color: '#8A92A4',
+    color: '#848C9E',
     fontSize: 12,
     marginTop: 10,
   },
   changeBox: {
-    backgroundColor: '#262F40',
+    backgroundColor: '#222B3B',
     padding: 14,
     borderRadius: 14,
     marginTop: 18,
@@ -544,18 +515,18 @@ const styles = StyleSheet.create({
     color: '#FF6F6F',
   },
   changeSubtext: {
-    color: '#8D96A8',
+    color: '#8A92A4',
     fontSize: 11,
     marginTop: 3,
   },
   notificationCard: {
-    backgroundColor: '#1A202C',
+    backgroundColor: '#181E2B',
     marginHorizontal: 18,
     marginTop: 16,
     padding: 18,
     borderRadius: 18,
     borderWidth: 1,
-    borderColor: '#2A3346',
+    borderColor: '#262F40',
   },
   notificationHeader: {
     flexDirection: 'row',
@@ -565,7 +536,7 @@ const styles = StyleSheet.create({
     width: 38,
     height: 38,
     borderRadius: 10,
-    backgroundColor: '#272F3E',
+    backgroundColor: '#232B3B',
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 12,
@@ -583,7 +554,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   notificationSubtitle: {
-    color: '#8A92A4',
+    color: '#848C9E',
     fontSize: 11,
     marginTop: 2,
     lineHeight: 15,
@@ -593,9 +564,9 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     alignItems: 'center',
     borderRadius: 8,
-    backgroundColor: '#242C3D',
+    backgroundColor: '#212838',
     borderWidth: 1,
-    borderColor: '#37435C',
+    borderColor: '#323D52',
   },
   testAlertText: {
     color: '#F3D58A',
@@ -603,13 +574,13 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   chartCard: {
-    backgroundColor: '#1A202C',
+    backgroundColor: '#181E2B',
     marginHorizontal: 18,
     marginTop: 16,
     padding: 18,
     borderRadius: 22,
     borderWidth: 1,
-    borderColor: '#2A3346',
+    borderColor: '#262F40',
   },
   chartHeader: {
     flexDirection: 'row',
@@ -622,7 +593,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   chartSubtitle: {
-    color: '#8A92A4',
+    color: '#848C9E',
     fontSize: 12,
     marginTop: 4,
   },
@@ -630,28 +601,46 @@ const styles = StyleSheet.create({
     fontSize: 22,
   },
   historyCard: {
-    backgroundColor: '#1A202C',
+    backgroundColor: '#181E2B',
     marginHorizontal: 18,
     marginTop: 16,
     padding: 18,
     borderRadius: 22,
     borderWidth: 1,
-    borderColor: '#2A3346',
+    borderColor: '#262F40',
+  },
+  historyCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  toggleDaysBtn: {
+    backgroundColor: '#232B3B',
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#354157',
+  },
+  toggleDaysText: {
+    color: '#F3D58A',
+    fontSize: 11,
+    fontWeight: '700',
   },
   historyTable: {
     marginTop: 14,
-    backgroundColor: '#141822',
+    backgroundColor: '#11151E',
     borderRadius: 14,
     overflow: 'hidden',
   },
   tableHeaderRow: {
     flexDirection: 'row',
-    backgroundColor: '#222938',
+    backgroundColor: '#1E2534',
     paddingVertical: 10,
     paddingHorizontal: 14,
   },
   tableHeaderCell: {
-    color: '#8A92A4',
+    color: '#848C9E',
     fontSize: 11,
     fontWeight: '700',
     textTransform: 'uppercase',
@@ -661,16 +650,16 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     paddingHorizontal: 14,
     borderBottomWidth: 1,
-    borderBottomColor: '#1E2433',
+    borderBottomColor: '#1A202D',
   },
   firstTableRow: {
-    backgroundColor: '#181E2B',
+    backgroundColor: '#151A24',
   },
   lastTableRow: {
     borderBottomWidth: 0,
   },
   tableCellDate: {
-    color: '#C6CCD8',
+    color: '#C2C8D4',
     fontSize: 12,
     fontWeight: '500',
   },
@@ -689,12 +678,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
   },
   footerText: {
-    color: '#636C80',
+    color: '#5D6577',
     fontSize: 11,
     textAlign: 'center',
   },
   footerSubtext: {
-    color: '#515869',
+    color: '#4B5263',
     fontSize: 10,
     marginTop: 4,
   },
