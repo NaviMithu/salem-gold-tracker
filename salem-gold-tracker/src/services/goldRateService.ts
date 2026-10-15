@@ -33,11 +33,25 @@ export interface GoldApiResponse {
 const STORAGE_KEY_LATEST = '@salem_gold_latest_rate_22k';
 const STORAGE_KEY_HISTORY = '@salem_gold_saved_history_30days';
 
+// Replace with your Render URL once deployed (e.g. 'https://salem-gold-api.onrender.com')
+export const RENDER_CLOUD_URL: string = '';
+
 /**
  * Resolves the backend API URL.
- * Automatically detects developer machine IP from Expo or falls back to local network IP.
+ * Uses Render cloud URL if set, otherwise automatically detects developer machine IP from Expo.
  */
 export function getBackendBaseUrl(): string {
+  // 1. If Render Cloud URL or EXPO_PUBLIC_API_URL is configured, use it
+  if (RENDER_CLOUD_URL && RENDER_CLOUD_URL.trim() !== '') {
+    return RENDER_CLOUD_URL.trim().replace(/\/+$/, '');
+  }
+
+  const envUrl = (process.env as Record<string, string | undefined>).EXPO_PUBLIC_API_URL;
+  if (envUrl && typeof envUrl === 'string' && envUrl.trim() !== '') {
+    return envUrl.trim().replace(/\/+$/, '');
+  }
+
+  // 2. If running under Expo Go, hostUri contains the PC IP e.g. "192.168.1.7:8081"
   const hostUri = Constants.expoConfig?.hostUri;
   if (hostUri) {
     const ip = hostUri.split(':')[0];

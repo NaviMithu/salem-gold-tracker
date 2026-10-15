@@ -50,19 +50,33 @@ export async function scrapeGoodreturns(targetDate?: string) {
   let driver: WebDriver | undefined;
 
   try {
+    const chromeArgs = [
+      '--headless=new',
+      '--no-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--window-size=1440,1200',
+    ];
+
+    const chromeOptions: Record<string, unknown> = {
+      args: chromeArgs,
+    };
+
+    // Use Chromium binary path in Docker/Linux environment
+    const chromiumBinary =
+      process.env.CHROME_BIN ||
+      (process.platform === 'linux' ? '/usr/bin/chromium' : undefined);
+
+    if (chromiumBinary) {
+      chromeOptions.binary = chromiumBinary;
+    }
+
     // Start Chrome in headless mode.
     driver = await new Builder()
       .forBrowser('chrome')
       .setChromeOptions({
         browserName: 'chrome',
-        'goog:chromeOptions': {
-          args: [
-            '--headless=new',
-            '--no-sandbox',
-            '--disable-dev-shm-usage',
-            '--window-size=1440,1200',
-          ],
-        },
+        'goog:chromeOptions': chromeOptions,
       } as never)
       .build();
 
