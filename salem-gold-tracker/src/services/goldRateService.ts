@@ -77,7 +77,8 @@ export async function fetchGoldRates(forceRefresh = false): Promise<GoldApiRespo
 
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 12000);
+    // 45s timeout to comfortably accommodate Render free tier cold-start wakeups
+    const timeoutId = setTimeout(() => controller.abort(), 45000);
 
     const response = await fetch(url, {
       method: 'GET',

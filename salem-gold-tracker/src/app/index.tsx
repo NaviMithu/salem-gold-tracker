@@ -39,18 +39,17 @@ export default function HomeScreen() {
   // Load fresh data from the backend
   const loadRates = useCallback(async (forceRefresh = false) => {
     try {
-      setErrorMessage(null);
       const result = await fetchGoldRates(forceRefresh);
       setData(result);
+      setErrorMessage(null);
     } catch (err) {
-      console.error('Failed to fetch gold rates:', err);
-      // Fallback to offline phone storage if backend is unreachable
+      console.warn('Network fetch issue, checking storage:', err);
       const cached = await getStoredGoldData();
       if (cached) {
         setData(cached);
-        setErrorMessage('Showing saved offline rates. Check backend connection.');
+        setErrorMessage(null); // Keep clean if we have stored data
       } else {
-        setErrorMessage('Unable to connect to backend server. Make sure it is running.');
+        setErrorMessage('Connecting to gold rate server... Tap to retry');
       }
     } finally {
       setLoading(false);
@@ -60,6 +59,14 @@ export default function HomeScreen() {
 
   // Fetch data on app open and when app returns to foreground
   useEffect(() => {
+    // Instantly display stored rates so user never sees a blank screen
+    getStoredGoldData().then((stored) => {
+      if (stored) {
+        setData(stored);
+        setLoading(false);
+      }
+    });
+
     loadRates(false);
 
     // Re-fetch whenever app comes back to foreground
